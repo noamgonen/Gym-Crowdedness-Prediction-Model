@@ -1,0 +1,470 @@
+---
+title: "Crowdedness at the Campus Gym"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+date: "2024-08-19"
+name: "Noam Gonen"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(kknn)
+library(glmnet)
+library(dials)
+library(vip)
+```
+
+
+# Introduction to the Project #
+
+The goal of this project is to use machine learning to predict how many people will be at the gym at a given time. I am using data from the Kaggle data set, ["Crowdedness at The Campus Gym"](https://www.kaggle.com/datasets/nsrose7224/crowdedness-at-the-campus-gym). This data was collected by Nick Rose with the consent of the university and the gym in question. I am using this data to create the best model that can most accurately predict the number of people using a multitude of regression analysis techniques.
+
+This can be useful when deciding the best time to go to the gym. Ideally people want to go during  times when the gym is not crowded therefore machines and weights are open to use. 
+
+![*Fig 1. gym.*](https://rec.arizona.edu/sites/default/files/styles/az_natural/public/2021-11/location_fitness_center.jpeg?itok=rIqEBsXr)
+
+
+## Project Roadmap ##
+To create this model, I will first look at my raw data and clean it up before using it. I will need to address missing values (if any), select the variables that will be most useful, and select my response variable. Then, I will perform exploratory data analysis to better understand the variables at hand, their relationships, and correlations. 
+
+After this, I will split my data into one training and one testing set. The training set will include most of the data, so the models will have a lot of data to learn from, but the testing set is important to test our models on new data and see how well they can predict the result variable. 
+
+Then, we will create four regression models: Linear Regression, K Nearest Neighbor, Ridge Regression, and Lasso Regression. Within these, I will be using a 10-fold cross-validation, meaning I will further split the training data into 10 folds and create 10 models of each type where each time, 9 of the folds are used to train, and the 10th fold is used to test. This will provide me with a close estimate of my model's ability to predict new data without testing it on my final testing data. Overall, for every model type, 10 models will be created.
+
+Next step for every one of those models is to tune the parameters for KNN, Ridge, and Lasso. This means I will test every reasonable value for these parameters, and see which performs best, providing me with 1,160 models overall. Ten linear regression models, 150 KNN models, 500 Ridge models, and 500 Lasso models are a lot of models! I will have to narrow my choices to the best five from each type and compare those to find my best and final model. Then, I will test it on my testing set to see how well it performed!
+
+
+
+# Exploratory Data Analysis #
+
+To start my project, let's load the data and see if anything needs to be cleaned up. Then, we can check out our variables and come up with questions that we might have about this data set.
+
+```{r dataset}
+gym_data = read.csv("/Users/noamgonen/Desktop/pstat 131/data.csv", header = TRUE)
+head(gym_data)
+```
+
+## Codebook ##
+Above we can see our variables include:
+
+  - number of people: numerical, will be used as the response variable
+
+  - date: string, includes the year, month, day, and time
+
+  - time stamp: integer, number of seconds since the beginning of the day
+
+  - day of week: integer, 0 = Monday, 1 = Tuesday,..., 6 = Sunday
+
+  - is weekend: integer, 1 if it's Saturday or Sunday, 0 otherwise
+
+  - is holiday: integer, 1 if it's a holiday, 0 if not
+
+  - temperature: float, in degrees Fahrenheit 
+
+  - is start of semester: integer, 1 for yes, 0 for no
+
+  - is during semester: 1 for yes 0 for no
+
+  - month: integer, Jan=1,..., Dec=12
+
+  - hour: integer between 0 and 23
+
+
+We have 10 columns and 62,184 observations in total. There are no missing values, and the data is set up already with dummy variables.
+
+It would be helpful to divide the data variable into two additional variables, day and year, to better analyze each one's effect on the number of people at the gym.
+
+```{r adding year and day}
+gym_data <- gym_data %>%
+  mutate(year = as.numeric(substr(date, 1, 4)))
+
+gym_data <- gym_data %>%
+  mutate(day = as.numeric(substr(date, 9, 10)))
+```
+
+Now that our data is organized and we have familiarized ourselves with the variables let’s start by answering some basic questions and exploring the relationships between them.
+
+
+## Questions to Explore ##
+
+I have come up with some questions I wanted to answer about the data set. They are written down below and I will be using plots to answer them.
+
+1. How attendance is affected by the day of the week
+2. How attendance is affected by the month of the year
+3. How attendance is affected by the time of the month
+4. How attendance is affected by the temperature outside
+5. How attendance is affected by the start of the semester
+6. How attendance is affected by the time of the day
+
+## Distribution Plots ##
+
+```{r number of people hist}
+ggplot(gym_data, aes(x=number_people)) +geom_bar() + 
+  labs(title = "Histogram of Number of People at The Gym", x = 'Number of People', y = 'Frequency')
+
+```
+
+First, let’s check out the distribution of the number of people in the gym by looking at a simple histogram of the frequency of the number of people at once. Above, we can see that most of the time, there are not many people at the gym, which probably accounts for the hours in the middle of the night when most people are asleep. The rest of the graph follows a Normal distribution centered at around 30. This means that the average number of people at the gym at once is 30. The graph also shows when the gym holds over 100 people.
+
+```{r month plot}
+ggplot(gym_data, aes(x=month, y=number_people))  +
+  geom_point()
+```
+
+The following plot shows the distribution of people in the gym throughout the year by month. This graph displays an expected trend. It seems that the gym is the most crowded during January, which is not surprising as this is many people’s New Year resolutions, but as the graph displays, the crowdedness declines as the year goes on because people lose motivation. Again, there is a spike in August; as the school’s academic year begins and people return to school, they feel motivated to go to the gym. Therefore, there is a spike in the crowdedness at the gym due to the two seasonal variables followed by decreases as the year continues.
+
+```{r day plot}
+ggplot(gym_data, aes(x=day, y=number_people))  +
+  geom_point()
+```
+
+In this plot, we see the distribution of people by the day of the month. There seems to be no correlation here; it is random which days of the month are crowded and which are not. 
+
+
+```{r week plot}
+ggplot(gym_data, aes(x=day_of_week, y=number_people))  +
+  geom_point()
+```
+
+The following plot displays the distribution of people by day of the week. Unsurprisingly, Sundays are the most crowded days as many people use this day to reset and get back into a routine for the week. Friday and Saturday are the lowest, which can be explained by the fact that many people use the days for leisure activities or leave on trips, which explains the low number of people in the gym. 
+
+```{r temp plot}
+ggplot(gym_data, aes(x=temperature, y=number_people))  +
+  geom_point()
+```
+
+The plot above suggests a non-linear relationship between temperature and the number of people. Initially, as temperature increases, the number of people also increases. Once it reaches around 60°F, the number of people stays near constant. There is a concentration of high points between 50°F and 70°F, indicating most data points (representing higher numbers of people) fall within this temperature range, which tells us that most people tend to attend the gym on days when the temperature is cooler. Unsurprisingly, hot days lessen the desire to work out outside as the weather causes people to be in a state of discomfort.
+
+
+```{r hour plot}
+ggplot(gym_data, aes(x=hour, y=number_people))  +
+  geom_point()
+```
+
+The graph above illustrates the distribution of the number of people at the gym depending on the hour of the day. Here, the gym has very few people after midnight and into the early hours (which is unsurprising). The time with the most people is between hours 16 and 22, the evening and night after the school and work day concludes. There are also some random times when there were prominent peaks in the afternoon, but those seem rare.
+
+
+## Correlation Plot ##
+
+```{r corrplot}
+library(corrplot)
+gym_data %>% 
+  select(where(is.numeric)) %>% 
+  cor() %>% 
+  corrplot(is.corr = FALSE)
+```
+
+From the correlation matrix plot, it's clear that the number of people has a strong positive linear relationship with time stamp, temperature, during semester, and hour. We saw all those relationships in the previous plots. Year and number of people have a negative correlation, meaning the number of people in the gym decreases yearly. 
+
+
+# Spliting the Data Into Training and Testing #
+
+Alright now that we have examined the data closely and identified some relationships, we are ready to begin making our model. The first step is to split the data into training and testing data. I will stratify it using the number of people to ensure that the distribution of people is evenly split between the two sets so our training and testing aren’t skewed.
+
+
+```{r split}
+set.seed(600)
+
+gym_split <- initial_split(gym_data, prop = 0.7, strata = number_people)
+
+gym_split
+
+gym_train <- training(gym_split)
+gym_test <- testing(gym_split)
+```
+
+
+# Making a Recipe #
+
+The next step is to make our recipe for the model. We provide the models with instructions to follow by using all of the variables except for the date variable because all of its elements were already accounted for with the other variables. A timestamp is not necessary either because it provides the same information that hour does and can cause over-fitting if included due to their very strong linear relationship. The result variable will always be the number of people because it is what we are trying to predict. This recipe is simple to follow as there is no need to add an impute because there is no missing data, and we don’t need to create dummy variables because the data already includes them. Lastly, we will normalize the variables by centering and scaling them.
+
+```{r recipe}
+gym_recipe <- recipe(
+  number_people ~ day_of_week + is_weekend + is_holiday + temperature + is_start_of_semester + is_during_semester + month + hour + day + year, data = gym_train) %>% 
+  step_center(all_predictors()) %>% 
+  step_scale(all_predictors())
+```
+
+
+# Cross-Validation #
+
+The next step is to split the training data into K-folds. I will set k=10, creating 10-folds. This will assess the model’s ability to take in and predict new data. As stated above, cross-validation is accomplished by splitting the data into separate folds. Each time, one of the 10-folds is used as a testing set for the model. This is accomplished K times; each time, a different fold is used to test, and the rest are used to train.
+
+This step is essential because finding the average success of the 10-folds is more accurate than finding the success rate of one sample of data because it lowers the variance.
+
+The folds are stratified on number_people to make sure they are balanced.
+
+```{r folds}
+gym_folds <- vfold_cv(gym_train, v = 10, strata = number_people)
+```
+
+
+# Creating the Models #
+
+We have now reached the most exciting part: constructing our models! All of the previous steps have set us up for this moment, where we train our data and test the success of our different models. We can fit many different models into this data, but for the sake of time, we will fit four models for this project: linear regression, K nearest neighbors, ridge regression, and lasso regression. 
+
+## Setting Up 4 Different Model Types ##
+To fit my models to my data set, I must follow these steps: 
+
+First, construct the models by specifying the kind of models I want to create, tune the needed parameter (to pick a value for them later), select the engine the model needs, and specify the mode (in this case, regression because our result variable is continuous). 
+
+```{r set up model}
+# Linear Regression 
+lm_model <- linear_reg() %>% 
+  set_mode("regression") %>%
+  set_engine("lm")
+
+# K Nearest Neighbor
+knn_model <- nearest_neighbor(neighbors = tune()) %>% #tuning neighbors
+  set_engine("kknn") %>% 
+  set_mode("regression")
+
+# Ridge Regression
+ridge_spec <- linear_reg(mixture = 0, #mixture=0 to specify ridge
+                         penalty = tune()) %>% #tuning penalty
+  set_mode("regression") %>% 
+  set_engine("glmnet")
+
+
+# Lasso Regression
+lasso_spec <- linear_reg(penalty = tune(), #tuning penalty
+                         mixture = 1) %>%  #mixture=1 to specify lasso
+  set_mode("regression") %>% 
+  set_engine("glmnet")
+```
+
+### Creating Workflows ###
+The second step is to create a workflow to assign the previously made recipe to the models I specified above.
+
+
+```{r workflow}
+# LINEAR REGRESSION 
+lm_workflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(gym_recipe)
+
+# K NEAREST NEIGHBORS
+knn_workflow <- workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(gym_recipe)
+
+# RIDGE REGRESSION
+ridge_workflow <- workflow() %>% 
+  add_recipe(gym_recipe) %>% 
+  add_model(ridge_spec)
+
+# LASSO REGRESSION
+lasso_workflow <- workflow() %>% 
+  add_recipe(gym_recipe) %>% 
+  add_model(lasso_spec)
+```
+
+## Tuning Grids ##
+Third step, now that our models have a workflow with the recipe, we can begin tuning the parameters we specified. To do this, I will create a tuning grid to determine the ranges of the parameters and state the needed levels. Linear regression does not need tuning. For KNN, we need to tune the number of neighbors, and for Ridge and Lasso, we need to tune the penalty. Luckily, we can use the same tuning for both models because it is for the same parameter.
+
+```{r tune grid}
+#KNN
+knn_grid <- grid_regular(neighbors(range = c(1,15)), levels = 15)
+
+# Lasso and Ridge
+penalty_grid <- grid_regular(penalty(range = c(-5,0)), levels = 50)
+```
+
+## Fitting Tuned Models On Folded Data ##
+Fourth step, is to use the tuning grid to fit all the models into the folded data. We are using our K-folds for this step and saving the tuned models as RDS files because they take a long time to run, and we don’t want to have to keep running them. We will also fit the linear regression to the folded data.
+
+```{r lm fit}
+#LM
+loaded_lm_model <- fit_resamples(lm_workflow, resamples = gym_folds, metrics = metric_set(rmse, rsq),  # Calculate RMSE and R-squared
+  control = control_resamples(save_pred = TRUE))
+```
+
+```{r knn tuned fit, eval = FALSE}
+# KNN
+knn_tune <- tune_grid(
+    knn_workflow,
+    resamples = gym_folds,
+    grid = knn_grid,
+    control=control_grid(verbose = TRUE)
+)
+
+saveRDS(knn_tune, "knn_tuned_model.rds")
+```
+
+```{r ridge tune fit, eval = FALSE}
+# Ridge
+ridge_tune <- tune_grid(
+  ridge_workflow,
+  resamples = gym_folds,
+  grid = penalty_grid,
+  control=control_grid(verbose = TRUE)
+)
+
+saveRDS(ridge_tune, "ridge_tuned_model.rds")
+```
+
+```{r lasso tune fit, eval = FALSE}
+# Lasso
+lasso_tune <- tune_grid(
+  lasso_workflow,
+  resamples = gym_folds,
+  grid = penalty_grid,
+  control=control_grid(verbose = TRUE)
+)
+
+saveRDS(lasso_tune, "lasso_tuned_model.rds")
+```
+
+Then we read them back in.
+
+```{r read rds}
+# KNN
+loaded_knn_model <- readRDS("knn_tuned_model.rds")
+
+# Ridge
+loaded_ridge_model <- readRDS("ridge_tuned_model.rds")
+
+# Lasso
+loaded_lasso_model <- readRDS("lasso_tuned_model.rds")
+```
+
+## Evaluating Model Results ##
+
+We can plot these tuned models to visualize how the different values of the parameters preform.
+
+```{r}
+autoplot(loaded_knn_model)+
+  theme_minimal()
+```
+
+From both plots, it is clear that the best performance occurs when the number of neighbors is around 5-6, as this is where RMSE is minimized and R^2 is maximized. When the number of neighbors is too small, the model likely overfits, resulting in high RMSE and low R^2. When too many neighbors are considered the model smoothens too much, leading to underfitting where both RMSE increases and R^2 drops.
+
+```{r}
+autoplot(loaded_ridge_model)+
+  theme_minimal()
+```
+
+The RMSE remains almost constant at around 14.32, regardless of the regularization parameter. Similarly, the R^2 value stays around 0.60 across the range of regularization values. The regularization does not appear to significantly affect model performance. This suggests that Ridge Regression might not be highly sensitive to the range of regularization values used in this case.
+
+```{r}
+autoplot(loaded_lasso_model)+
+  theme_minimal()
+```
+
+Initially, the RMSE is constant around 14.3 as the regularization strength increases up to about 0.1.
+However, beyond this point, the RMSE starts to rise significantly, reaching above 14.5. 
+Similarly, the R^2 value remains relatively flat around 0.60 as regularization increases up to about 0.1.
+Once the regularization increases beyond 0.1, the R^2 drops sharply, indicating that the model is losing its ability to explain the variance in the data. 
+The best performance is when the regularization strength is relatively low (before 0.1), as both RMSE and R^2 are stable and close to their best values. After this point, too much regularization leads to underfitting.
+
+
+Next we collect the metrics and take a look at the best models from each type.
+```{r collect metrics}
+collect_metrics(loaded_lm_model)
+knn_results <- show_best(loaded_knn_model, metric = "rmse", n = Inf)
+knn_results
+ridge_results <- show_best(loaded_ridge_model, metric = "rmse", n = Inf)
+ridge_results
+lasso_results <- show_best(loaded_lasso_model, metric = "rmse", n = Inf)
+lasso_results
+```
+## Selecting The Top Model ##
+We are almost done creating these models! The fifth step is to find our top model. We will select the most suitable model of each type to narrow down these results. We pick the most suitable model by evaluating each model's RMSE (Root Mean Squared Error) value and looking for the lowest value for the mean and standard error. We can select the model using the select_by_one_std_err function, which selects the most simple model within one standard error of the numerically optimal results. In this case, there are considerable pros to choosing the higher parameter values while remaining a low RMSE. A higher-tuned parameter value provides a simpler model, creating a model with a lower variance.
+
+
+```{r selecting the best of each type}
+#KNN
+best_KNN <- select_by_one_std_err(loaded_knn_model, desc(neighbors), metric = "rmse")
+best_KNN
+
+#Ridge
+best_ridge <- select_by_one_std_err(loaded_ridge_model, desc(penalty), metric = "rmse")
+best_ridge
+
+#Lasso
+best_lasso <- select_by_one_std_err(loaded_lasso_model, desc(penalty), metric = "rmse")
+best_lasso
+
+```
+
+```{r getting the RMSEs}
+ridge_results %>%
+  filter(penalty == best_ridge$penalty) %>%
+  dplyr::select(mean, std_err)
+
+lasso_results %>%
+  filter(penalty == best_lasso$penalty) %>%
+  dplyr::select(mean, std_err)
+```
+The computer has selected model 7 for K Nearest Neighbors with k=7, it chose model 50 for the Ridge model where penalty=1 and model 47 for Lasso, where penalty =0.494.
+
+These models have an estimated RMSE of:
+LM: mean= 14.2804532 and se= 0.090771977
+KNN: mean= 6.611566 and se = 0.04383863
+Ridge: mean= 14.31279 and se = 0.08938691
+Lasso: mean= 14.35301 and se = 0.09071679
+
+From the results above, we can see the Ridge model and Lasso model have the highest RMSE values, which means they are not great estimators for the data. LM is also high, which indicates that it’s not a linear relationship. It appears that KNN had the lowest RMSE value. RMSE measures the average magnitude of the errors between predicted and actual values, with larger errors having a disproportionately higher impact due to squaring. Therefore, a lower RMSE indicates that the model’s predictions are closer to the actual values, meaning the model performs better in accuracy. So, we will continue the rest of our project with the KNN model!
+
+# Fitting The Final Model #
+Let's save our top model (KNN 7) in our finalized workflow and then fit it into the full training data! We should also save the model's RMSE value so we can compare it to the estimated one.
+
+```{r final workflow}
+#KNN
+final_KNN_wf <- finalize_workflow(knn_workflow, best_KNN)
+```
+
+```{r final fit to train}
+#KNN
+final_KNN_fit <- fit(final_KNN_wf, gym_train)
+final_KNN_fit
+```
+
+
+# Predicting The Testing Set # 
+We have reached the final step and the moment of truth! Let's see how well our KNN model with k=8 performs when asked to predict new data from the testing set.
+
+```{r fitting to test}
+augment(final_KNN_fit, new_data = gym_test) %>% rmse(truth= number_people, estimate= .pred)
+```
+Our model could predict with an RMSE of 6.588474, which is better than we had previously estimated with the K-folds! This is good and means our model did better than expected! This final RMSE value of 6.588474 indicates that, on average, the predictions made by my model deviate from the actual target values by approximately 6.59 units.
+
+Lets visualize this on a plot
+```{r predicted vs actual plot}
+gym_tibble <- predict(final_KNN_fit, new_data = gym_test %>% select(-number_people))
+gym_tibble <- bind_cols(gym_tibble, gym_test %>% select(number_people))
+```
+```{r}
+gym_tibble %>% 
+  ggplot(aes(x = .pred, y = number_people)) +
+  geom_point(alpha = 0.2) +
+  geom_abline(lty = 2) +
+  theme_grey() +
+  coord_obs_pred() +
+  labs(title = "Predicted Values vs. Actual Values")
+```
+
+Overall, the model was able to predict most of the results accurately. The dots fall very close to the line, and even the ones that don’t fall right on the line follow the general pattern of the line. Of course, there are a few outliers that the model didn’t guess accurately, but that’s to be expected. Overall, I think my model did very well.
+
+
+# Conclusion #
+
+In this project, a predictive model was developed to estimate the crowdedness of a gym based on historical data and relevant features. Several machine learning models were tuned and evaluated, including Linear Regression,  K-Nearest Neighbors (KNN), Ridge Regression, and Lasso Regression, with a focus on optimizing the model's performance through hyperparameter tuning.
+
+The KNN model demonstrated strong predictive performance when the number of neighbors was tuned. The optimal number of neighbors was identified to be 7, where the Root Mean Square Error (RMSE) was minimized and estimated to be 6.611566, and the R-squared (R^2) value was maximized, indicating a good balance between overfitting and underfitting.
+
+The KNN model emerged as the most effective for predicting gym crowdedness, given its flexibility in handling non-linear relationships between input features and the target variable. The Ridge and Lasso models were less sensitive to hyperparameter tuning and did not outperform the KNN model in accuracy or explanatory power.
+
+The final KNN model demonstrated reasonable accuracy, with RMSE values indicating that predictions were close to the actual crowdedness levels, variating on average by 6.59 people. In total the KNN model is a sufficient and reliable model for a person wanting to predict the crowdedness of a gym to plan ahead the best times to workout.
+
+This model also allows gym management to predict crowdedness, enabling better resource planning and improved user experience. Future work could explore additional features (e.g., local events, midterm and final week) or different models (e.g., polynomial regression, elastic net, random forest) to further enhance prediction accuracy.
